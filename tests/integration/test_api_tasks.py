@@ -1,6 +1,11 @@
 import asyncio
 import time
 
+from fastapi.testclient import TestClient
+
+from src.api.routes import results, tasks
+from src.services.result_storage_service import save_result_record
+
 
 def test_create_list_update_delete_task(api_client, api_context, sample_task_payload):
     response = api_client.post("/api/tasks/", json=sample_task_payload)
@@ -162,6 +167,79 @@ def test_update_task_accepts_six_field_cron_expression(api_client, sample_task_p
     task_response = api_client.get("/api/tasks/0")
     assert task_response.status_code == 200
     assert task_response.json()["cron"] == "0 0 8 * * *"
+
+
+def test_update_task_keyword_keeps_historical_result_task_metadata(
+    api_context,
+    sample_task_payload,
+    monkeypatch,
+):
+    monkeypatch.chdir(api_context["db_path"].parent)
+    monkeypatch.setenv("APP_DATABASE_FILE", str(api_context["db_path"]))
+    api_context["app"].include_router(results.router)
+    client = TestClient(api_context["app"])
+
+    assert client.post("/api/tasks/", json=sample_task_payload).status_code == 200
+    asyncio.run(
+        save_result_record(
+            {
+                "爬取时间": "2026-08-03T09:00:00",
+                "搜索关键字": sample_task_payload["keyword"],
+                "任务名称": sample_task_payload["task_name"],
+                "商品信息": {
+                    "商品ID": "old-keyword-item",
+                    "商品标题": "旧关键词结果",
+                    "商品链接": "https://www.goofish.com/item?id=old-keyword-item",
+                    "当前售价": "¥9000",
+                },
+                "卖家信息": {},
+                "ai_analysis": {"is_recommended": False},
+            },
+            sample_task_payload["keyword"],
+        )
+    )
+
+    async def fake_generate_criteria(**_kwargs):
+        return "updated criteria"
+
+    monkeypatch.setattr(tasks, "generate_criteria", fake_generate_criteria)
+    new_keyword = "sony a7m4 ii"
+    update_response = client.patch(
+        "/api/tasks/0",
+        json={
+            "keyword": new_keyword,
+            "description": "Updated requirements for the newer model",
+        },
+    )
+    assert update_response.status_code == 200
+
+    asyncio.run(
+        save_result_record(
+            {
+                "爬取时间": "2026-08-03T10:00:00",
+                "搜索关键字": new_keyword,
+                "任务名称": sample_task_payload["task_name"],
+                "商品信息": {
+                    "商品ID": "new-keyword-item",
+                    "商品标题": "新关键词结果",
+                    "商品链接": "https://www.goofish.com/item?id=new-keyword-item",
+                    "当前售价": "¥10000",
+                },
+                "卖家信息": {},
+                "ai_analysis": {"is_recommended": False},
+            },
+            new_keyword,
+        )
+    )
+
+    files_response = client.get("/api/results/files")
+    assert files_response.status_code == 200
+    details = {
+        detail["filename"]: detail
+        for detail in files_response.json()["file_details"]
+    }
+    assert details["sony_a7m4_full_data.jsonl"]["task_name"] == "Sony A7M4"
+    assert details["sony_a7m4_ii_full_data.jsonl"]["task_name"] == "Sony A7M4"
 
 
 def test_create_task_rejects_invalid_cron_expression(api_client, sample_task_payload):

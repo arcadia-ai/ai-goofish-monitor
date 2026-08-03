@@ -4,8 +4,8 @@ import { useI18n } from 'vue-i18n'
 import type { ResultInsights, ResultItem } from '@/types/result.d.ts'
 import * as resultsApi from '@/api/results'
 import type { GetResultContentParams } from '@/api/results'
+import type { ResultFileDetail } from '@/api/results'
 import { useWebSocket } from '@/composables/useWebSocket'
-import * as tasksApi from '@/api/tasks'
 
 export function useResults() {
   const { t } = useI18n()
@@ -19,10 +19,9 @@ export function useResults() {
   const page = ref(1)
   const limit = ref(100)
   const blacklistKeywords = ref<string[]>([])
-  const taskNameByKeyword = ref<Record<string, string>>({})
+  const fileDetailByFilename = ref<Record<string, ResultFileDetail>>({})
   const isFileOptionsReady = ref(false)
   const hasFetchedFiles = ref(false)
-  const hasFetchedTasks = ref(false)
   const isSavingBlacklist = ref(false)
   const readyDelayMs = 200
   let readyTimer: ReturnType<typeof setTimeout> | null = null
@@ -51,10 +50,6 @@ export function useResults() {
   const error = ref<Error | null>(null)
   const { on } = useWebSocket()
 
-  function normalizeKeyword(value: string) {
-    return value.trim().toLowerCase().replace(/\s+/g, '_')
-  }
-
   function getKeywordFromFilename(filename: string) {
     return filename.replace(/_full_data\.jsonl$/i, '').toLowerCase()
   }
@@ -62,8 +57,12 @@ export function useResults() {
   // Methods
   async function fetchFiles() {
     try {
-      const fileList = await resultsApi.getResultFiles()
+      const data = await resultsApi.getResultFiles()
+      const fileList = data.files
       files.value = fileList
+      fileDetailByFilename.value = Object.fromEntries(
+        data.file_details.map((detail) => [detail.filename, detail])
+      )
       // If a file is selected that no longer exists, reset it.
       // Otherwise, if nothing is selected, select the first file by default.
       if (selectedFile.value && fileList.includes(selectedFile.value)) {
@@ -140,26 +139,8 @@ export function useResults() {
     }
   }
 
-  async function fetchTaskNameMap() {
-    try {
-      const tasks = await tasksApi.getAllTasks()
-      const mapping: Record<string, string> = {}
-      tasks.forEach((task) => {
-        if (task.keyword) {
-          mapping[normalizeKeyword(task.keyword)] = task.task_name
-        }
-      })
-      taskNameByKeyword.value = mapping
-    } catch (e) {
-      if (e instanceof Error) error.value = e
-    } finally {
-      hasFetchedTasks.value = true
-      scheduleFileOptionsReady()
-    }
-  }
-
   function scheduleFileOptionsReady() {
-    if (isFileOptionsReady.value || !hasFetchedFiles.value || !hasFetchedTasks.value) return
+    if (isFileOptionsReady.value || !hasFetchedFiles.value) return
     if (readyTimer) return
     readyTimer = setTimeout(() => {
       isFileOptionsReady.value = true
@@ -177,10 +158,6 @@ export function useResults() {
       fetchResults()
       fetchInsights()
     }
-  })
-
-  on('tasks_updated', () => {
-    fetchTaskNameMap()
   })
 
   async function refreshResults() {
@@ -275,13 +252,16 @@ export function useResults() {
 
   const fileOptions = computed(() =>
     files.value.map((file) => {
-      const keyword = getKeywordFromFilename(file)
-      const taskName = taskNameByKeyword.value[keyword]
+      const detail = fileDetailByFilename.value[file]
+      const taskName = detail?.task_name?.trim()
+        || detail?.keyword?.trim()
+        || getKeywordFromFilename(file)
+        || t('common.unnamed')
       return {
         value: file,
-        taskName: taskName || t('common.unnamed'),
+        taskName,
         label: t('results.filters.taskNameLabel', {
-          task: taskName || t('common.unnamed'),
+          task: taskName,
         }),
       }
     })
@@ -290,7 +270,6 @@ export function useResults() {
   // Lifecycle
   onMounted(() => {
     fetchFiles()
-    fetchTaskNameMap()
   })
 
   return {

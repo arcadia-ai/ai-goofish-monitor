@@ -224,6 +224,41 @@ def _list_result_filenames_sync() -> list[str]:
     return [str(row["result_filename"]) for row in rows]
 
 
+async def list_result_file_details() -> list[dict[str, str]]:
+    return await asyncio.to_thread(_list_result_file_details_sync)
+
+
+def _list_result_file_details_sync() -> list[dict[str, str]]:
+    bootstrap_sqlite_storage()
+    with sqlite_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                current.result_filename,
+                current.keyword,
+                current.task_name,
+                current.crawl_time
+            FROM result_items AS current
+            WHERE current.id = (
+                SELECT candidate.id
+                FROM result_items AS candidate
+                WHERE candidate.result_filename = current.result_filename
+                ORDER BY candidate.crawl_time DESC, candidate.id DESC
+                LIMIT 1
+            )
+            ORDER BY current.crawl_time DESC, current.result_filename DESC
+            """
+        ).fetchall()
+    return [
+        {
+            "filename": str(row["result_filename"]),
+            "keyword": str(row["keyword"] or ""),
+            "task_name": str(row["task_name"] or ""),
+        }
+        for row in rows
+    ]
+
+
 async def result_file_exists(filename: str) -> bool:
     return await asyncio.to_thread(_result_file_exists_sync, filename)
 

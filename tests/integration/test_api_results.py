@@ -13,6 +13,60 @@ def _write_jsonl(path, records):
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def test_result_files_include_latest_historical_task_metadata(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    jsonl_dir = tmp_path / "jsonl"
+    jsonl_dir.mkdir(parents=True, exist_ok=True)
+    target_file = jsonl_dir / "demo_full_data.jsonl"
+    _write_jsonl(
+        target_file,
+        [
+            {
+                "爬取时间": "2026-01-02T09:00:00",
+                "搜索关键字": "demo",
+                "任务名称": "旧任务名称",
+                "商品信息": {
+                    "商品ID": "metadata-1",
+                    "商品标题": "Demo One",
+                    "商品链接": "https://www.goofish.com/item?id=metadata-1",
+                    "当前售价": "¥950",
+                },
+                "卖家信息": {},
+                "ai_analysis": {"is_recommended": False},
+            },
+            {
+                "爬取时间": "2026-01-02T10:00:00",
+                "搜索关键字": "demo",
+                "任务名称": "最新抓取任务名称",
+                "商品信息": {
+                    "商品ID": "metadata-2",
+                    "商品标题": "Demo Two",
+                    "商品链接": "https://www.goofish.com/item?id=metadata-2",
+                    "当前售价": "¥900",
+                },
+                "卖家信息": {},
+                "ai_analysis": {"is_recommended": False},
+            },
+        ],
+    )
+
+    app = FastAPI()
+    app.include_router(results.router)
+    response = TestClient(app).get("/api/results/files")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "files": ["demo_full_data.jsonl"],
+        "file_details": [
+            {
+                "filename": "demo_full_data.jsonl",
+                "keyword": "demo",
+                "task_name": "最新抓取任务名称",
+            }
+        ],
+    }
+
+
 def test_results_filter_and_sort_for_keyword_recommendations(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     jsonl_dir = tmp_path / "jsonl"
