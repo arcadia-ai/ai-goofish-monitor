@@ -1,11 +1,11 @@
 services:
   app:
-    image: ${APP_IMAGE:-ghcr.io/usagi-org/ai-goofish:latest}
+    image: ${APP_IMAGE:-ghcr.io/arcadia-ai/ai-goofish-monitor:latest}
     container_name: ai-goofish-monitor-app
     pull_policy: always
     init: true
     ports:
-      - "8000:8000"
+      - "127.0.0.1:18070:8000"
     env_file:
       - .env
     environment:
