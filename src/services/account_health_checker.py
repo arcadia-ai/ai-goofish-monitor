@@ -2,9 +2,8 @@
 from __future__ import annotations
 
 import json
-from urllib.parse import urlencode
 
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_playwright
+from playwright.async_api import async_playwright
 
 from src.config import RUN_HEADLESS
 from src.scraper import (
@@ -12,8 +11,12 @@ from src.scraper import (
     _build_extra_headers,
     _clean_kwargs,
     _default_context_options,
-    _is_login_url,
     _resolve_browser_channel,
+)
+from src.services.search_probe import (
+    prepare_search_context,
+    probe_search_page,
+    search_browser_launch_args,
 )
 
 
@@ -24,17 +27,11 @@ async def check_account_health(account_path: str) -> dict[str, str]:
     except (OSError, json.JSONDecodeError) as exc:
         return {"status": "invalid_file", "message": f"登录态文件无法读取: {exc}"}
 
-    launch_args = [
-        "--disable-blink-features=AutomationControlled",
-        "--disable-dev-shm-usage",
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-    ]
     try:
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(
                 headless=RUN_HEADLESS,
-                args=launch_args,
+                args=search_browser_launch_args(),
                 channel=_resolve_browser_channel(),
             )
             try:
@@ -52,23 +49,11 @@ async def check_account_health(account_path: str) -> dict[str, str]:
                     storage_state=storage_state,
                     **_clean_kwargs(context_kwargs),
                 )
+                await prepare_search_context(context)
                 page = await context.new_page()
-                await page.goto(
-                    f"https://www.goofish.com/search?{urlencode({'q': '手机'})}",
-                    wait_until="domcontentloaded",
-                    timeout=30000,
-                )
-                if _is_login_url(page.url):
-                    return {"status": "expired", "message": "登录态已跳转到登录页面。"}
-                if await page.locator(
-                    "div.baxia-dialog-mask, div.J_MIDDLEWARE_FRAME_WIDGET"
-                ).count():
-                    return {"status": "risk_controlled", "message": "检测到闲鱼风控验证。"}
-                await page.wait_for_selector("text=新发布", timeout=15000)
-                return {"status": "available", "message": "登录态可正常访问搜索页。"}
+                result = await probe_search_page(page, "手机")
+                return {"status": result.status, "message": result.message}
             finally:
                 await browser.close()
-    except PlaywrightTimeoutError as exc:
-        return {"status": "error", "message": f"账号检测超时: {exc}"}
     except Exception as exc:
         return {"status": "error", "message": f"账号检测失败: {exc}"}

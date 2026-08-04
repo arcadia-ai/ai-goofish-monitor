@@ -4,7 +4,6 @@ import os
 import random
 from datetime import datetime
 from typing import Optional
-from urllib.parse import urlencode
 
 from playwright.async_api import (
     Response,
@@ -61,6 +60,12 @@ from src.services.search_pagination import (
     advance_search_page,
     is_search_results_response,
 )
+from src.services.search_probe import (
+    is_login_url as _is_login_url,
+    prepare_search_context,
+    probe_search_page,
+    search_browser_launch_args,
+)
 from src.services.account_health_service import (
     filter_eligible_account_files,
     record_account_health,
@@ -82,13 +87,6 @@ class InvalidAccountStateError(ValueError):
 
 FAILURE_GUARD = FailureGuard()
 EDGE_DOCKER_WARNING_PRINTED = False
-
-
-def _is_login_url(url: str) -> bool:
-    if not url:
-        return False
-    lowered = url.lower()
-    return "passport.goofish.com" in lowered or "mini_login" in lowered
 
 
 def _resolve_browser_channel() -> str:
@@ -573,16 +571,10 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
 
         async with async_playwright() as p:
             # 反检测启动参数
-            launch_args = [
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-web-security",
-                "--disable-features=IsolateOrigins,site-per-process",
-            ]
-
-            launch_kwargs = {"headless": RUN_HEADLESS, "args": launch_args}
+            launch_kwargs = {
+                "headless": RUN_HEADLESS,
+                "args": search_browser_launch_args(),
+            }
             if proxy_server:
                 launch_kwargs["proxy"] = {"server": proxy_server}
 
@@ -631,77 +623,20 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                 order_handler=order_coordinator.handle,
             )
 
-            # 增强反检测脚本（模拟真实移动设备）
-            await context.add_init_script("""
-                // 移除webdriver标识
-                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-
-                // 模拟真实移动设备的navigator属性
-                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-                Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN', 'zh', 'en-US', 'en']});
-
-                // 添加chrome对象
-                window.chrome = {runtime: {}, loadTimes: function() {}, csi: function() {}};
-
-                // 模拟触摸支持
-                Object.defineProperty(navigator, 'maxTouchPoints', {get: () => 5});
-
-                // 覆盖permissions查询（避免暴露自动化）
-                const originalQuery = window.navigator.permissions.query;
-                window.navigator.permissions.query = (parameters) => (
-                    parameters.name === 'notifications' ?
-                        Promise.resolve({state: Notification.permission}) :
-                        originalQuery(parameters)
-                );
-            """)
+            await prepare_search_context(context)
 
             page = await context.new_page()
 
             try:
-                # 步骤 0 - 模拟真实用户：先访问首页（重要的反检测措施）
-                log_time("步骤 0 - 模拟真实用户访问首页...")
-                await page.goto(
-                    "https://www.goofish.com/",
-                    wait_until="domcontentloaded",
-                    timeout=30000,
-                )
-                log_time("[反爬] 在首页停留，模拟浏览...")
-                await random_sleep(1, 2)
+                search_probe = await probe_search_page(page, keyword)
+                if search_probe.status == "expired":
+                    raise LoginRequiredError(search_probe.message)
+                if search_probe.status == "risk_controlled":
+                    raise RiskControlError(search_probe.message)
+                if search_probe.status != "available" or search_probe.response is None:
+                    raise RuntimeError(search_probe.message)
+                initial_response = search_probe.response
 
-                # 模拟随机滚动（移动设备的触摸滚动）
-                await page.evaluate("window.scrollBy(0, Math.random() * 500 + 200)")
-                await random_sleep(1, 2)
-
-                log_time("步骤 1 - 导航到搜索结果页...")
-                # 使用 'q' 参数构建正确的搜索URL，并进行URL编码
-                params = {"q": keyword}
-                search_url = f"https://www.goofish.com/search?{urlencode(params)}"
-                log_time(f"目标URL: {search_url}")
-
-                # 先监听搜索接口响应，再执行导航，避免错过首次请求
-                async with page.expect_response(
-                    is_search_results_response, timeout=30000
-                ) as initial_response_info:
-                    await page.goto(
-                        search_url, wait_until="domcontentloaded", timeout=60000
-                    )
-                if _is_login_url(page.url):
-                    raise LoginRequiredError(
-                        f"Login required: redirected to {page.url} (cookies/state likely expired)"
-                    )
-
-                # 捕获初始搜索的API数据
-                initial_response = await initial_response_info.value
-
-                # 等待页面加载出关键筛选元素，以确认已成功进入搜索结果页
-                try:
-                    await page.wait_for_selector("text=新发布", timeout=15000)
-                except PlaywrightTimeoutError as e:
-                    if _is_login_url(page.url):
-                        raise LoginRequiredError(
-                            f"Login required: redirected to {page.url} (cookies/state likely expired)"
-                        ) from e
-                    raise
                 record_account_health(
                     state_file,
                     "available",
