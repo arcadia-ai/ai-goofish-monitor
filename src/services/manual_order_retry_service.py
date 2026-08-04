@@ -9,7 +9,6 @@ from playwright.async_api import async_playwright
 from src.config import RUN_HEADLESS
 from src.scraper import (
     _build_context_overrides,
-    _build_extra_headers,
     _clean_kwargs,
     _default_context_options,
     _resolve_browser_channel,
@@ -45,9 +44,6 @@ async def retry_order_record(record: dict) -> dict:
             ):
                 storage_state = {"cookies": snapshot.get("cookies", [])}
                 context_kwargs.update(_build_context_overrides(snapshot))
-                headers = _build_extra_headers(snapshot.get("headers"))
-                if headers:
-                    context_kwargs["extra_http_headers"] = headers
             context = await browser.new_context(
                 storage_state=storage_state,
                 **_clean_kwargs(context_kwargs),

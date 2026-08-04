@@ -333,18 +333,6 @@ def _build_context_overrides(snapshot: dict) -> dict:
     return _clean_kwargs(overrides)
 
 
-def _build_extra_headers(raw_headers: Optional[dict]) -> dict:
-    if not raw_headers:
-        return {}
-    excluded = {"cookie", "content-length"}
-    headers = {}
-    for key, value in raw_headers.items():
-        if not key or key.lower() in excluded or value is None:
-            continue
-        headers[key] = value
-    return headers
-
-
 async def scrape_user_profile(context, user_id: str) -> dict:
     """
     【新版】访问指定用户的个人主页，按顺序采集其摘要信息、完整的商品列表和完整的评价列表。
@@ -595,9 +583,6 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                     print(f"检测到增强浏览器快照，应用环境参数: {state_file}")
                     storage_state_arg = {"cookies": snapshot_data.get("cookies", [])}
                     context_kwargs.update(_build_context_overrides(snapshot_data))
-                    extra_headers = _build_extra_headers(snapshot_data.get("headers"))
-                    if extra_headers:
-                        context_kwargs["extra_http_headers"] = extra_headers
                 else:
                     storage_state_arg = snapshot_data
 
