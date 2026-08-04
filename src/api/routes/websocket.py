@@ -5,6 +5,11 @@ WebSocket 路由
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from typing import Set
 
+from src.api.session_auth import (
+    SESSION_COOKIE_NAME,
+    is_authenticated_session,
+)
+
 
 router = APIRouter()
 
@@ -17,6 +22,11 @@ async def websocket_endpoint(
     websocket: WebSocket,
 ):
     """WebSocket 端点"""
+    if not is_authenticated_session(
+        websocket.cookies.get(SESSION_COOKIE_NAME, "")
+    ):
+        await websocket.close(code=4401, reason="authentication required")
+        return
     # 接受连接
     await websocket.accept()
     active_connections.add(websocket)

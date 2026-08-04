@@ -61,6 +61,11 @@ from src.services.search_pagination import (
     advance_search_page,
     is_search_results_response,
 )
+from src.services.account_health_service import (
+    filter_eligible_account_files,
+    record_account_health,
+)
+from src.services.auto_order_service import AutoOrderCoordinator
 
 
 class RiskControlError(Exception):
@@ -69,6 +74,10 @@ class RiskControlError(Exception):
 
 class LoginRequiredError(Exception):
     """Raised when Goofish redirects to the passport/mini_login flow."""
+
+
+class InvalidAccountStateError(ValueError):
+    """Raised only when a persisted account state file cannot be decoded."""
 
 
 FAILURE_GUARD = FailureGuard()
@@ -478,6 +487,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
 
     rotation_settings = _get_rotation_settings(task_config)
     account_items = load_state_files(rotation_settings["account_state_dir"])
+    account_items = filter_eligible_account_files(account_items)
     runtime_plan = resolve_account_runtime_plan(
         strategy=task_config.get("account_strategy"),
         account_state_file=task_config.get("account_state_file"),
@@ -540,6 +550,12 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
         stop_scraping = False
 
         if not os.path.exists(state_file):
+            record_account_health(
+                state_file,
+                "invalid_file",
+                source="task",
+                message="登录状态文件不存在。",
+            )
             raise FileNotFoundError(f"登录状态文件不存在: {state_file}")
 
         snapshot_data = None
@@ -547,7 +563,13 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
             with open(state_file, "r", encoding="utf-8") as f:
                 snapshot_data = json.load(f)
         except Exception as e:
-            print(f"警告：读取登录状态文件失败，将直接按路径使用: {e}")
+            record_account_health(
+                state_file,
+                "invalid_file",
+                source="task",
+                message=f"读取登录状态文件失败: {e}",
+            )
+            raise InvalidAccountStateError(f"读取登录状态文件失败: {e}") from e
 
         async with async_playwright() as p:
             # 反检测启动参数
@@ -594,6 +616,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
             seller_profile_cache = SellerProfileCache(
                 ttl_seconds=_get_seller_profile_cache_ttl(task_config)
             )
+            order_coordinator = AutoOrderCoordinator(task=task_config, context=context)
             analysis_dispatcher = ItemAnalysisDispatcher(
                 concurrency=_get_ai_analysis_concurrency(task_config),
                 skip_ai_analysis=SKIP_AI_ANALYSIS,
@@ -605,6 +628,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                 ai_analyzer=get_ai_analysis,
                 notifier=send_ntfy_notification,
                 saver=save_to_jsonl,
+                order_handler=order_coordinator.handle,
             )
 
             # 增强反检测脚本（模拟真实移动设备）
@@ -678,6 +702,12 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                             f"Login required: redirected to {page.url} (cookies/state likely expired)"
                         ) from e
                     raise
+                record_account_health(
+                    state_file,
+                    "available",
+                    source="task",
+                    message="任务已成功进入搜索结果页。",
+                )
 
                 # 模拟真实用户行为：页面加载后的初始停留和浏览
                 log_time("[反爬] 模拟用户查看页面...")
@@ -1097,6 +1127,9 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                                         seller_id=str(user_id) if user_id else None,
                                         zhima_credit_text=zhima_credit_text,
                                         registration_duration_text=registration_duration_text,
+                                        auto_order_enabled=_as_bool(
+                                            task_config.get("auto_order_enabled"), False
+                                        ),
                                     )
                                 )
 
@@ -1268,15 +1301,38 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
             break
         except LoginRequiredError as e:
             last_error = str(e)
+            record_account_health(
+                state_path,
+                "expired",
+                source="task",
+                message=last_error,
+            )
             print(f"检测到登录失效/重定向: {e}")
             break
         except RiskControlError as e:
             last_error = str(e)
+            record_account_health(
+                state_path,
+                "risk_controlled",
+                source="task",
+                message=last_error,
+            )
             print(f"检测到风控或验证触发: {e}")
             # 风控验证通常不是简单轮换能解决的，避免无意义重试。
             break
         except Exception as e:
             last_error = f"{type(e).__name__}: {e}"
+            current_health = (
+                "invalid_file"
+                if isinstance(e, (FileNotFoundError, InvalidAccountStateError))
+                else "error"
+            )
+            record_account_health(
+                state_path,
+                current_health,
+                source="task",
+                message=last_error,
+            )
             print(f"本次尝试失败: {last_error}")
             if attempt < attempt_limit:
                 print("将尝试轮换账号/IP 后重试...")

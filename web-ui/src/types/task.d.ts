@@ -22,6 +22,10 @@ export interface Task {
   region?: string | null;
   decision_mode: 'ai' | 'keyword';
   keyword_rules: string[];
+  auto_order_enabled: boolean;
+  auto_order_score_threshold: number;
+  auto_order_max_price: string | null;
+  auto_order_max_per_run: number;
   is_running: boolean;
 }
 
@@ -73,4 +77,8 @@ export interface TaskGenerateRequest {
   region?: string | null;
   decision_mode?: 'ai' | 'keyword';
   keyword_rules?: string[];
+  auto_order_enabled?: boolean;
+  auto_order_score_threshold?: number;
+  auto_order_max_price?: string | null;
+  auto_order_max_per_run?: number;
 }

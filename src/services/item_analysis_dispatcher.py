@@ -16,6 +16,7 @@ ImageDownloader = Callable[[str, list[str], str], Awaitable[list[str]]]
 AIAnalyzer = Callable[[dict, list[str], str], Awaitable[Optional[dict]]]
 Notifier = Callable[[dict, str], Awaitable[None]]
 Saver = Callable[[dict, str], Awaitable[bool]]
+OrderHandler = Callable[[dict, dict], Awaitable[Optional[dict]]]
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ class ItemAnalysisJob:
     seller_id: Optional[str]
     zhima_credit_text: Optional[str]
     registration_duration_text: str
+    auto_order_enabled: bool = False
 
 
 class ItemAnalysisDispatcher:
@@ -45,6 +47,7 @@ class ItemAnalysisDispatcher:
         ai_analyzer: AIAnalyzer,
         notifier: Notifier,
         saver: Saver,
+        order_handler: OrderHandler | None = None,
     ) -> None:
         self._semaphore = asyncio.Semaphore(max(1, concurrency))
         self._skip_ai_analysis = skip_ai_analysis
@@ -53,6 +56,7 @@ class ItemAnalysisDispatcher:
         self._ai_analyzer = ai_analyzer
         self._notifier = notifier
         self._saver = saver
+        self._order_handler = order_handler
         self._tasks: set[asyncio.Task] = set()
         self.completed_count = 0
 
@@ -74,9 +78,12 @@ class ItemAnalysisDispatcher:
         item_data = record.get("商品信息", {}) or {}
         record["卖家信息"] = await self._load_seller_info(job)
         record["ai_analysis"] = await self._build_analysis_result(job, record)
+        order_outcome = None
         if await self._saver(record, job.keyword):
             self.completed_count += 1
-        await self._notify_if_recommended(item_data, record["ai_analysis"])
+            if self._order_handler is not None:
+                order_outcome = await self._order_handler(record, record["ai_analysis"])
+        await self._notify_if_recommended(item_data, record["ai_analysis"], order_outcome)
 
     async def _load_seller_info(self, job: ItemAnalysisJob) -> dict:
         seller_info = {}
@@ -126,7 +133,13 @@ class ItemAnalysisDispatcher:
             image_paths = await self._download_images(job, record)
             if not job.prompt_text:
                 return self._build_ai_error_result("任务未配置AI prompt，跳过分析。")
-            ai_result = await self._ai_analyzer(record, image_paths, job.prompt_text)
+            prompt_text = job.prompt_text
+            if job.auto_order_enabled:
+                prompt_text += (
+                    "\n本任务启用了自动锁单。必须输出数值字段 value_score，"
+                    "取值范围 0-100；无法评分时将 is_recommended 设为 false。"
+                )
+            ai_result = await self._ai_analyzer(record, image_paths, prompt_text)
             if not ai_result:
                 return self._build_ai_error_result(
                     "AI analysis returned None after retries.",
@@ -164,10 +177,27 @@ class ItemAnalysisDispatcher:
             except Exception as exc:
                 print(f"   [图片] 删除图片文件时出错: {exc}")
 
-    async def _notify_if_recommended(self, item_data: dict, analysis_result: dict) -> None:
+    async def _notify_if_recommended(
+        self,
+        item_data: dict,
+        analysis_result: dict,
+        order_outcome: dict | None = None,
+    ) -> None:
         if not analysis_result.get("is_recommended"):
             return
         try:
-            await self._notifier(item_data, analysis_result.get("reason", "无"))
+            reason = analysis_result.get("reason", "无")
+            if order_outcome and order_outcome.get("status") == "submitted_unpaid":
+                reason = (
+                    f"[锁单成功，待付款] 订单号: {order_outcome.get('platform_order_id') or '未返回'}; "
+                    f"AI评分: {order_outcome.get('value_score')}; "
+                    f"应付金额: {order_outcome.get('payable_total')}; AI原因: {reason}"
+                )
+            elif order_outcome:
+                reason = (
+                    f"[锁单已安全停止] 状态: {order_outcome.get('status')}; "
+                    f"原因: {order_outcome.get('reason')}; AI原因: {reason}"
+                )
+            await self._notifier(item_data, reason)
         except Exception as exc:
             print(f"   [通知] 发送推荐通知失败: {exc}")

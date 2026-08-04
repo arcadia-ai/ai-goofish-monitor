@@ -3,6 +3,7 @@
 """
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from typing import List
 import os
 import aiofiles
@@ -21,7 +22,7 @@ from src.services.task_generation_runner import (
     run_ai_generation_job,
 )
 from src.services.task_payloads import serialize_task, serialize_tasks
-from src.domain.models.task import TaskCreate, TaskUpdate, TaskGenerateRequest
+from src.domain.models.task import Task, TaskCreate, TaskUpdate, TaskGenerateRequest
 from src.prompt_utils import generate_criteria
 from src.utils import resolve_task_log_path
 from src.services.account_strategy_service import normalize_account_strategy
@@ -55,6 +56,16 @@ def _validate_final_account_strategy(existing_task, task_update: TaskUpdate) -> 
     task_update.account_strategy = account_strategy
     if account_strategy == "fixed" and not account_state_file:
         raise HTTPException(status_code=400, detail="固定账号模式下必须选择账号。")
+
+
+def _validate_final_task_configuration(existing_task: Task, task_update: TaskUpdate) -> None:
+    payload = existing_task.model_dump()
+    payload.update(task_update.model_dump(exclude_unset=True))
+    try:
+        Task.model_validate(payload)
+    except ValidationError as exc:
+        message = exc.errors()[0].get("msg", "任务配置无效。")
+        raise HTTPException(status_code=400, detail=message.removeprefix("Value error, "))
 @router.get("", response_model=List[dict])
 async def get_tasks(
     service: TaskService = Depends(get_task_service),
@@ -150,6 +161,7 @@ async def update_task(
         if not existing_task:
             raise HTTPException(status_code=404, detail="任务未找到")
         _validate_final_account_strategy(existing_task, task_update)
+        _validate_final_task_configuration(existing_task, task_update)
 
         current_mode = getattr(existing_task, "decision_mode", "ai") or "ai"
         target_mode = task_update.decision_mode or current_mode

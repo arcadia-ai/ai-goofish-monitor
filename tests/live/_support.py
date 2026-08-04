@@ -46,6 +46,8 @@ class LiveTestSettings:
     enable_task_generation: bool
     account_source_path: Path
     ai_test_payload: dict[str, str]
+    web_username: str
+    web_password: str
 
 
 @dataclass(frozen=True)
@@ -124,6 +126,8 @@ def load_live_settings(repo_root: Path) -> LiveTestSettings:
         enable_task_generation=env_flag("LIVE_ENABLE_TASK_GENERATION"),
         account_source_path=resolve_account_source(repo_root),
         ai_test_payload=build_ai_test_payload(runtime_env),
+        web_username=runtime_env.get("WEB_USERNAME", "admin"),
+        web_password=runtime_env.get("WEB_PASSWORD", "admin123"),
     )
 
 

@@ -129,3 +129,59 @@ def test_item_analysis_dispatcher_supports_keyword_mode_without_ai():
     asyncio.run(run())
     assert saved_records[0]["ai_analysis"]["analysis_source"] == "keyword"
     assert saved_records[0]["ai_analysis"]["is_recommended"] is True
+
+
+def test_dispatcher_saves_before_order_and_requires_score_in_prompt():
+    events = []
+    prompts = []
+    notifications = []
+
+    async def ai_analyzer(_record, _images, prompt):
+        prompts.append(prompt)
+        return {"is_recommended": True, "value_score": 92, "reason": "值得购买"}
+
+    async def saver(_record, _keyword):
+        events.append("saved")
+        return True
+
+    async def order_handler(_record, _analysis):
+        events.append("ordered")
+        return {
+            "status": "submitted_unpaid",
+            "value_score": 92,
+            "payable_total": 88,
+            "platform_order_id": "ORDER-92",
+        }
+
+    async def run():
+        dispatcher = ItemAnalysisDispatcher(
+            concurrency=1,
+            skip_ai_analysis=False,
+            seller_loader=lambda _seller: asyncio.sleep(0, result={}),
+            image_downloader=lambda *_args: asyncio.sleep(0, result=[]),
+            ai_analyzer=ai_analyzer,
+            notifier=lambda _item, reason: asyncio.sleep(0, result=notifications.append(reason)),
+            saver=saver,
+            order_handler=order_handler,
+        )
+        dispatcher.submit(
+            ItemAnalysisJob(
+                keyword="demo",
+                task_name="Demo",
+                decision_mode="ai",
+                analyze_images=False,
+                prompt_text="基础提示",
+                keyword_rules=(),
+                final_record={"商品信息": {"商品ID": "92"}},
+                seller_id=None,
+                zhima_credit_text=None,
+                registration_duration_text="",
+                auto_order_enabled=True,
+            )
+        )
+        await dispatcher.join()
+
+    asyncio.run(run())
+    assert events == ["saved", "ordered"]
+    assert "value_score" in prompts[0]
+    assert "AI评分: 92" in notifications[0]

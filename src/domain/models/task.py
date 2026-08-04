@@ -3,6 +3,7 @@
 定义任务实体及其业务逻辑
 """
 import re
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, List, Literal, Optional
 
@@ -68,11 +69,15 @@ def _normalize_payload_keywords(payload: Any) -> Any:
     if payload is None or not isinstance(payload, dict):
         return payload
     values = dict(payload)
-    values["account_state_file"] = clean_account_state_file(values.get("account_state_file"))
-    values["account_strategy"] = normalize_account_strategy(
-        values.get("account_strategy"),
-        values.get("account_state_file"),
-    )
+    if "account_state_file" in values:
+        values["account_state_file"] = clean_account_state_file(
+            values.get("account_state_file")
+        )
+    if "account_strategy" in values or "account_state_file" in values:
+        values["account_strategy"] = normalize_account_strategy(
+            values.get("account_strategy"),
+            values.get("account_state_file"),
+        )
     if "keyword_rules" in values:
         values["keyword_rules"] = _normalize_keyword_values(values.get("keyword_rules"))
     elif "keyword_rule_groups" in values:
@@ -104,6 +109,22 @@ def _normalize_price_value(value):
     return value
 
 
+def _validate_auto_order_configuration(model):
+    if not model.auto_order_enabled:
+        return model
+    if model.decision_mode != "ai":
+        raise ValueError("自动锁单仅支持 AI 判断模式。")
+    if model.account_strategy != "fixed" or not model.account_state_file:
+        raise ValueError("自动锁单任务必须绑定固定账号。")
+    try:
+        max_price = Decimal(str(model.auto_order_max_price))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError("开启自动锁单时必须填写有效的锁单金额上限。")
+    if max_price <= 0:
+        raise ValueError("锁单金额上限必须大于 0。")
+    return model
+
+
 class Task(BaseModel):
     """任务实体"""
 
@@ -129,6 +150,10 @@ class Task(BaseModel):
     region: Optional[str] = None
     decision_mode: Literal["ai", "keyword"] = "ai"
     keyword_rules: List[str] = Field(default_factory=list)
+    auto_order_enabled: bool = False
+    auto_order_score_threshold: int = Field(default=85, ge=0, le=100)
+    auto_order_max_price: Optional[str] = None
+    auto_order_max_per_run: int = Field(default=1, ge=1, le=5)
     is_running: bool = False
 
     @model_validator(mode="before")
@@ -140,6 +165,10 @@ class Task(BaseModel):
     @classmethod
     def normalize_keyword_rules(cls, value):
         return _normalize_keyword_values(value)
+
+    @model_validator(mode="after")
+    def validate_auto_order(self):
+        return _validate_auto_order_configuration(self)
 
     def can_start(self) -> bool:
         """检查任务是否可以启动"""
@@ -179,13 +208,17 @@ class TaskCreate(BaseModel):
     region: Optional[str] = None
     decision_mode: Literal["ai", "keyword"] = "ai"
     keyword_rules: List[str] = Field(default_factory=list)
+    auto_order_enabled: bool = False
+    auto_order_score_threshold: int = Field(default=85, ge=0, le=100)
+    auto_order_max_price: Optional[str] = None
+    auto_order_max_per_run: int = Field(default=1, ge=1, le=5)
 
     @model_validator(mode="before")
     @classmethod
     def normalize_legacy_keyword_payload(cls, values):
         return _normalize_payload_keywords(values)
 
-    @field_validator("min_price", "max_price", mode="before")
+    @field_validator("min_price", "max_price", "auto_order_max_price", mode="before")
     @classmethod
     def convert_price_to_str(cls, value):
         return _normalize_price_value(value)
@@ -219,7 +252,7 @@ class TaskCreate(BaseModel):
             raise ValueError("关键词判断模式下，至少需要一个关键词。")
         if self.account_strategy == "fixed" and not self.account_state_file:
             raise ValueError("固定账号模式下必须选择账号。")
-        return self
+        return _validate_auto_order_configuration(self)
 
 
 class TaskUpdate(BaseModel):
@@ -246,6 +279,10 @@ class TaskUpdate(BaseModel):
     region: Optional[str] = None
     decision_mode: Optional[Literal["ai", "keyword"]] = None
     keyword_rules: Optional[List[str]] = None
+    auto_order_enabled: Optional[bool] = None
+    auto_order_score_threshold: Optional[int] = Field(default=None, ge=0, le=100)
+    auto_order_max_price: Optional[str] = None
+    auto_order_max_per_run: Optional[int] = Field(default=None, ge=1, le=5)
     is_running: Optional[bool] = None
 
     @model_validator(mode="before")
@@ -253,7 +290,7 @@ class TaskUpdate(BaseModel):
     def normalize_legacy_keyword_payload(cls, values):
         return _normalize_payload_keywords(values)
 
-    @field_validator("min_price", "max_price", mode="before")
+    @field_validator("min_price", "max_price", "auto_order_max_price", mode="before")
     @classmethod
     def convert_price_to_str(cls, value):
         return _normalize_price_value(value)
@@ -310,13 +347,17 @@ class TaskGenerateRequest(BaseModel):
     region: Optional[str] = None
     decision_mode: Literal["ai", "keyword"] = "ai"
     keyword_rules: List[str] = Field(default_factory=list)
+    auto_order_enabled: bool = False
+    auto_order_score_threshold: int = Field(default=85, ge=0, le=100)
+    auto_order_max_price: Optional[str] = None
+    auto_order_max_per_run: int = Field(default=1, ge=1, le=5)
 
     @model_validator(mode="before")
     @classmethod
     def normalize_legacy_keyword_payload(cls, values):
         return _normalize_payload_keywords(values)
 
-    @field_validator("min_price", "max_price", mode="before")
+    @field_validator("min_price", "max_price", "auto_order_max_price", mode="before")
     @classmethod
     def convert_price_to_str(cls, value):
         return _normalize_price_value(value)
@@ -355,4 +396,4 @@ class TaskGenerateRequest(BaseModel):
             raise ValueError("关键词判断模式下，至少需要一个关键词。")
         if self.account_strategy == "fixed" and not self.account_state_file:
             raise ValueError("固定账号模式下必须选择账号。")
-        return self
+        return _validate_auto_order_configuration(self)

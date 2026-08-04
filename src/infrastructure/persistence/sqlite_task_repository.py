@@ -92,13 +92,17 @@ class SqliteTaskRepository(TaskRepository):
                     max_pages, personal_only, min_price, max_price, cron,
                     ai_prompt_base_file, ai_prompt_criteria_file, account_state_file,
                     account_strategy, free_shipping, new_publish_option, region,
-                    decision_mode, keyword_rules_json, is_running
+                    decision_mode, keyword_rules_json, auto_order_enabled,
+                    auto_order_score_threshold, auto_order_max_price,
+                    auto_order_max_per_run, is_running
                 ) VALUES (
                     :id, :task_name, :enabled, :keyword, :description, :analyze_images,
                     :max_pages, :personal_only, :min_price, :max_price, :cron,
                     :ai_prompt_base_file, :ai_prompt_criteria_file, :account_state_file,
                     :account_strategy, :free_shipping, :new_publish_option, :region,
-                    :decision_mode, :keyword_rules_json, :is_running
+                    :decision_mode, :keyword_rules_json, :auto_order_enabled,
+                    :auto_order_score_threshold, :auto_order_max_price,
+                    :auto_order_max_per_run, :is_running
                 )
                 """,
                 payload,
@@ -126,6 +130,7 @@ class SqliteTaskRepository(TaskRepository):
         values["analyze_images"] = int(task.analyze_images)
         values["personal_only"] = int(task.personal_only)
         values["free_shipping"] = int(task.free_shipping)
+        values["auto_order_enabled"] = int(task.auto_order_enabled)
         values["is_running"] = int(task.is_running)
         values["keyword_rules_json"] = json.dumps(task.keyword_rules or [], ensure_ascii=False)
         values.pop("keyword_rules", None)

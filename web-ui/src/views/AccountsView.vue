@@ -2,8 +2,10 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { listAccounts, getAccount, createAccount, updateAccount, deleteAccount, type AccountItem } from '@/api/accounts'
+import { RefreshCw } from 'lucide-vue-next'
+import { listAccounts, getAccount, createAccount, updateAccount, deleteAccount, checkAccountHealth, type AccountItem } from '@/api/accounts'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
@@ -16,6 +18,7 @@ const { t } = useI18n()
 const accounts = ref<AccountItem[]>([])
 const isLoading = ref(false)
 const isSaving = ref(false)
+const checkingAccount = ref<string | null>(null)
 const router = useRouter()
 
 const isCreateDialogOpen = ref(false)
@@ -66,6 +69,41 @@ function openDeleteDialog(name: string) {
 
 function goCreateTask(name: string) {
   router.push({ path: '/tasks', query: { account: name, create: '1' } })
+}
+
+function healthLabel(status: AccountItem['health_status']) {
+  return t(`accounts.health.${status}`)
+}
+
+function healthClass(status: AccountItem['health_status']) {
+  return {
+    available: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    expired: 'border-red-200 bg-red-50 text-red-700',
+    risk_controlled: 'border-amber-200 bg-amber-50 text-amber-700',
+    invalid_file: 'border-red-200 bg-red-50 text-red-700',
+    error: 'border-slate-200 bg-slate-100 text-slate-700',
+    unknown: 'border-slate-200 bg-white text-slate-500',
+  }[status]
+}
+
+function formatCheckedAt(value: string | null) {
+  if (!value) return t('accounts.health.neverChecked')
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  }).format(new Date(value))
+}
+
+async function handleHealthCheck(name: string) {
+  checkingAccount.value = name
+  try {
+    await checkAccountHealth(name)
+    await fetchAccounts()
+    toast({ title: t('accounts.toasts.healthChecked') })
+  } catch (e) {
+    toast({ title: t('accounts.toasts.healthCheckFailed'), description: (e as Error).message, variant: 'destructive' })
+  } finally {
+    checkingAccount.value = null
+  }
 }
 
 async function handleCreateAccount() {
@@ -183,9 +221,19 @@ onMounted(fetchAccounts)
                 <Button size="sm" variant="outline" @click="goCreateTask(account.name)">{{ t('accounts.list.createTask') }}</Button>
               </div>
               <p class="break-all text-sm text-slate-500">{{ account.path }}</p>
+              <div class="flex flex-wrap items-center gap-2">
+                <Badge variant="outline" :class="healthClass(account.health_status)" :title="account.health_message || undefined">
+                  {{ healthLabel(account.health_status) }}
+                </Badge>
+                <span class="text-xs text-slate-500">{{ formatCheckedAt(account.last_checked_at) }}</span>
+              </div>
+              <p v-if="account.health_message" class="text-xs text-slate-500">{{ account.health_message }}</p>
             </div>
             <div class="mt-4 flex flex-wrap gap-2">
               <Button size="sm" variant="outline" class="flex-1 min-w-[120px]" @click="openEditDialog(account.name)">{{ t('accounts.list.update') }}</Button>
+              <Button size="icon" variant="outline" :title="t('accounts.health.check')" :disabled="checkingAccount === account.name" @click="handleHealthCheck(account.name)">
+                <RefreshCw class="h-4 w-4" :class="checkingAccount === account.name ? 'animate-spin' : ''" />
+              </Button>
               <Button size="sm" variant="destructive" class="flex-1 min-w-[120px]" @click="openDeleteDialog(account.name)">{{ t('accounts.list.delete') }}</Button>
             </div>
           </article>
@@ -197,23 +245,35 @@ onMounted(fetchAccounts)
               <TableRow>
                 <TableHead>{{ t('accounts.list.name') }}</TableHead>
                 <TableHead>{{ t('accounts.list.file') }}</TableHead>
+                <TableHead>{{ t('accounts.list.health') }}</TableHead>
                 <TableHead class="text-right">{{ t('accounts.list.actions') }}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               <TableRow v-if="isLoading">
-                <TableCell colspan="3" class="h-20 text-center text-muted-foreground">{{ t('common.loading') }}</TableCell>
+                <TableCell colspan="4" class="h-20 text-center text-muted-foreground">{{ t('common.loading') }}</TableCell>
               </TableRow>
               <TableRow v-else-if="accounts.length === 0">
-                <TableCell colspan="3" class="h-20 text-center text-muted-foreground">{{ t('accounts.list.empty') }}</TableCell>
+                <TableCell colspan="4" class="h-20 text-center text-muted-foreground">{{ t('accounts.list.empty') }}</TableCell>
               </TableRow>
               <TableRow v-else v-for="account in accounts" :key="account.name">
                 <TableCell class="font-medium">{{ account.name }}</TableCell>
                 <TableCell class="text-sm text-gray-500">{{ account.path }}</TableCell>
+                <TableCell>
+                  <div class="space-y-1">
+                    <Badge variant="outline" :class="healthClass(account.health_status)" :title="account.health_message || undefined">
+                      {{ healthLabel(account.health_status) }}
+                    </Badge>
+                    <p class="text-xs text-slate-500">{{ formatCheckedAt(account.last_checked_at) }}</p>
+                  </div>
+                </TableCell>
                 <TableCell class="text-right">
                   <div class="flex justify-end gap-2">
                     <Button size="sm" variant="outline" @click="goCreateTask(account.name)">{{ t('accounts.list.createTask') }}</Button>
                     <Button size="sm" variant="outline" @click="openEditDialog(account.name)">{{ t('accounts.list.update') }}</Button>
+                    <Button size="icon" variant="outline" :title="t('accounts.health.check')" :disabled="checkingAccount === account.name" @click="handleHealthCheck(account.name)">
+                      <RefreshCw class="h-4 w-4" :class="checkingAccount === account.name ? 'animate-spin' : ''" />
+                    </Button>
                     <Button size="sm" variant="destructive" @click="openDeleteDialog(account.name)">{{ t('accounts.list.delete') }}</Button>
                   </div>
                 </TableCell>

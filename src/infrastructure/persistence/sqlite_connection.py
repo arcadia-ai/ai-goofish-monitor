@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -43,7 +44,49 @@ SCHEMA_STATEMENTS = (
         region TEXT,
         decision_mode TEXT NOT NULL,
         keyword_rules_json TEXT NOT NULL,
+        auto_order_enabled INTEGER NOT NULL DEFAULT 0,
+        auto_order_score_threshold INTEGER NOT NULL DEFAULT 85,
+        auto_order_max_price TEXT,
+        auto_order_max_per_run INTEGER NOT NULL DEFAULT 1,
         is_running INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS account_health (
+        account_name TEXT PRIMARY KEY,
+        account_path TEXT NOT NULL,
+        status TEXT NOT NULL,
+        source TEXT,
+        last_checked_at TEXT,
+        last_success_at TEXT,
+        message TEXT,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS order_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER,
+        task_name TEXT NOT NULL,
+        account_name TEXT NOT NULL,
+        account_path TEXT NOT NULL,
+        result_filename TEXT,
+        item_id TEXT NOT NULL,
+        title TEXT,
+        item_link TEXT,
+        value_score REAL NOT NULL,
+        score_threshold REAL NOT NULL,
+        observed_price REAL NOT NULL,
+        payable_total REAL,
+        max_price REAL NOT NULL,
+        status TEXT NOT NULL,
+        reason TEXT,
+        platform_order_id TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        submitted_at TEXT,
+        UNIQUE(account_name, item_id)
     )
     """,
     """
@@ -98,6 +141,7 @@ SCHEMA_STATEMENTS = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_tasks_name ON tasks(task_name)",
+    "CREATE INDEX IF NOT EXISTS idx_order_records_status_updated ON order_records(status, updated_at DESC)",
     """
     CREATE INDEX IF NOT EXISTS idx_results_filename_crawl
     ON result_items(result_filename, crawl_time DESC)
@@ -134,16 +178,37 @@ def _prepare_database_file(path: str) -> None:
 
 
 def _apply_pragmas(conn: sqlite3.Connection) -> None:
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
     conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+    for attempt in range(3):
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            break
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() or attempt == 2:
+                raise
+            time.sleep(0.05)
+    conn.execute("PRAGMA foreign_keys=ON")
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
     for statement in SCHEMA_STATEMENTS:
         conn.execute(statement)
     _migrate_result_items_status(conn)
+    _migrate_auto_order_task_columns(conn)
     conn.commit()
+
+
+def _migrate_auto_order_task_columns(conn: sqlite3.Connection) -> None:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    additions = {
+        "auto_order_enabled": "INTEGER NOT NULL DEFAULT 0",
+        "auto_order_score_threshold": "INTEGER NOT NULL DEFAULT 85",
+        "auto_order_max_price": "TEXT",
+        "auto_order_max_per_run": "INTEGER NOT NULL DEFAULT 1",
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
 
 
 def _migrate_result_items_status(conn: sqlite3.Connection) -> None:

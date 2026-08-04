@@ -3,7 +3,8 @@
 整合所有路由和服务
 """
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -17,6 +18,7 @@ from src.api.routes import (
     login_state,
     websocket,
     accounts,
+    orders,
 )
 from src.api.dependencies import (
     set_process_service,
@@ -31,6 +33,12 @@ from src.services.task_generation_service import TaskGenerationService
 from src.infrastructure.persistence.sqlite_bootstrap import bootstrap_sqlite_storage
 from src.infrastructure.persistence.sqlite_task_repository import SqliteTaskRepository
 from src.infrastructure.config.settings import settings as app_settings
+from src.api.session_auth import (
+    SESSION_COOKIE_NAME,
+    clear_session_cookie,
+    is_authenticated_session,
+    set_session_cookie,
+)
 
 
 # 全局服务实例
@@ -102,6 +110,19 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+
+@app.middleware("http")
+async def require_api_session(request: Request, call_next):
+    """Enforce the existing web login on server-side business APIs."""
+    if request.url.path.startswith("/api/") and not is_authenticated_session(
+        request.cookies.get(SESSION_COOKIE_NAME, "")
+    ):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "登录会话无效或已过期。"},
+        )
+    return await call_next(request)
+
 # 注册路由
 app.include_router(tasks.router)
 app.include_router(dashboard.router)
@@ -112,6 +133,7 @@ app.include_router(results.router)
 app.include_router(login_state.router)
 app.include_router(websocket.router)
 app.include_router(accounts.router)
+app.include_router(orders.router)
 
 # 挂载静态文件
 # 旧的静态文件目录（用于截图等）
@@ -132,8 +154,6 @@ async def health_check():
 
 
 # 认证状态检查端点
-from fastapi import Request, HTTPException
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 class LoginRequest(BaseModel):
@@ -142,15 +162,21 @@ class LoginRequest(BaseModel):
 
 
 @app.post("/auth/status")
-async def auth_status(payload: LoginRequest):
+async def auth_status(payload: LoginRequest, request: Request, response: Response):
     """检查认证状态"""
     if payload.username == app_settings.web_username and payload.password == app_settings.web_password:
+        set_session_cookie(response, request)
         return {"authenticated": True, "username": payload.username}
     raise HTTPException(status_code=401, detail="认证失败")
 
 
+@app.post("/auth/logout")
+async def auth_logout(response: Response):
+    clear_session_cookie(response)
+    return {"authenticated": False}
+
+
 # 主页路由 - 服务 Vue 3 SPA
-from fastapi.responses import JSONResponse
 
 @app.get("/")
 async def read_root(request: Request):

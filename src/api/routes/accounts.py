@@ -4,16 +4,25 @@
 import json
 import os
 import re
+import asyncio
 import aiofiles
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List
 from src.infrastructure.config.env_manager import env_manager
+from src.services.account_health_checker import check_account_health
+from src.services.account_health_service import (
+    delete_account_health,
+    get_account_health,
+    record_account_health,
+    reset_account_health,
+)
 
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
 ACCOUNT_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,50}$")
+_health_check_locks: dict[str, asyncio.Lock] = {}
 
 
 class AccountCreate(BaseModel):
@@ -73,6 +82,7 @@ async def list_accounts():
         accounts.append({
             "name": name,
             "path": os.path.join(state_dir, filename),
+            **get_account_health(os.path.join(state_dir, filename)),
         })
     return accounts
 
@@ -99,6 +109,7 @@ async def create_account(data: AccountCreate):
         raise HTTPException(status_code=409, detail="账号已存在")
     async with aiofiles.open(path, "w", encoding="utf-8") as f:
         await f.write(data.content)
+    reset_account_health(path)
     return {"message": "账号已添加", "name": account_name, "path": path}
 
 
@@ -113,6 +124,7 @@ async def update_account(name: str, data: AccountUpdate):
         raise HTTPException(status_code=404, detail="账号不存在")
     async with aiofiles.open(path, "w", encoding="utf-8") as f:
         await f.write(data.content)
+    reset_account_health(path)
     return {"message": "账号已更新", "name": account_name, "path": path}
 
 
@@ -123,4 +135,24 @@ async def delete_account(name: str):
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="账号不存在")
     os.remove(path)
+    delete_account_health(path)
     return {"message": "账号已删除"}
+
+
+@router.post("/{name}/health-check", response_model=dict)
+async def health_check_account(name: str):
+    account_name = _validate_name(name)
+    path = _account_path(account_name)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="账号不存在")
+    lock = _health_check_locks.setdefault(account_name, asyncio.Lock())
+    if lock.locked():
+        raise HTTPException(status_code=409, detail="该账号正在检测中")
+    async with lock:
+        result = await check_account_health(path)
+        return record_account_health(
+            path,
+            result["status"],
+            source="manual",
+            message=result.get("message"),
+        )

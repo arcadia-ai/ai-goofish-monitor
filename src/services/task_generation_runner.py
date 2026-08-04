@@ -40,6 +40,10 @@ def build_task_create(req: TaskGenerateRequest, criteria_file: str) -> TaskCreat
         region=req.region,
         decision_mode=req.decision_mode or "ai",
         keyword_rules=req.keyword_rules,
+        auto_order_enabled=req.auto_order_enabled,
+        auto_order_score_threshold=req.auto_order_score_threshold,
+        auto_order_max_price=req.auto_order_max_price,
+        auto_order_max_per_run=req.auto_order_max_per_run,
     )
 
 

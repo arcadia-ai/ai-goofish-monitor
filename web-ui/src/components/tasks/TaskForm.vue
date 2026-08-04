@@ -113,6 +113,10 @@ watch(() => [props.mode, props.initialData, props.defaultValues, props.defaultAc
         defaultValues.new_publish_option || props.initialData.new_publish_option || '__none__',
       region: defaultValues.region || props.initialData.region || '',
       decision_mode: defaultValues.decision_mode || props.initialData.decision_mode || 'ai',
+      auto_order_enabled: defaultValues.auto_order_enabled ?? props.initialData.auto_order_enabled ?? false,
+      auto_order_score_threshold: defaultValues.auto_order_score_threshold ?? props.initialData.auto_order_score_threshold ?? 85,
+      auto_order_max_price: defaultValues.auto_order_max_price ?? props.initialData.auto_order_max_price ?? undefined,
+      auto_order_max_per_run: defaultValues.auto_order_max_per_run ?? props.initialData.auto_order_max_per_run ?? 1,
     }
     keywordRulesInput.value = (defaultValues.keyword_rules || props.initialData.keyword_rules || []).join('\n')
     // 编辑模式下，根据 cron 值判断模式
@@ -135,6 +139,10 @@ watch(() => [props.mode, props.initialData, props.defaultValues, props.defaultAc
       new_publish_option: '__none__',
       region: '',
       decision_mode: 'ai',
+      auto_order_enabled: false,
+      auto_order_score_threshold: 85,
+      auto_order_max_price: undefined,
+      auto_order_max_per_run: 1,
       ...defaultValues,
     }
     if (!form.value.account_strategy) {
@@ -211,6 +219,37 @@ function handleSubmit() {
       variant: 'destructive',
     })
     return
+  }
+
+  if (form.value.auto_order_enabled) {
+    const scoreThreshold = Number(form.value.auto_order_score_threshold)
+    const maxPrice = Number(form.value.auto_order_max_price)
+    const maxPerRun = Number(form.value.auto_order_max_per_run)
+    if (decisionMode !== 'ai' || accountStrategy.value !== 'fixed') {
+      toast({
+        title: t('tasks.form.validation.autoOrderIncomplete'),
+        description: t('tasks.form.validation.autoOrderRequiresAiFixed'),
+        variant: 'destructive',
+      })
+      return
+    }
+    if (!Number.isFinite(maxPrice) || maxPrice <= 0) {
+      toast({
+        title: t('tasks.form.validation.autoOrderIncomplete'),
+        description: t('tasks.form.validation.autoOrderPriceRequired'),
+        variant: 'destructive',
+      })
+      return
+    }
+    if (!Number.isInteger(scoreThreshold) || scoreThreshold < 0 || scoreThreshold > 100
+      || !Number.isInteger(maxPerRun) || maxPerRun < 1 || maxPerRun > 5) {
+      toast({
+        title: t('tasks.form.validation.autoOrderIncomplete'),
+        description: t('tasks.form.validation.autoOrderRangeInvalid'),
+        variant: 'destructive',
+      })
+      return
+    }
   }
 
   // Filter out fields that shouldn't be sent in update requests
@@ -397,6 +436,30 @@ function handleSubmit() {
               {{ account.name }}
             </option>
           </select>
+        </div>
+      </div>
+      <div class="grid gap-2 border-t border-slate-100 pt-5 sm:grid-cols-4 sm:items-start sm:gap-4">
+        <Label for="auto-order" class="sm:pt-1 sm:text-right">{{ t('tasks.form.autoOrder') }}</Label>
+        <div class="space-y-3 sm:col-span-3">
+          <div class="flex items-center gap-3">
+            <Switch id="auto-order" v-model="form.auto_order_enabled" />
+            <span class="text-sm font-medium text-slate-700">{{ form.auto_order_enabled ? t('common.enabled') : t('common.disabled') }}</span>
+          </div>
+          <p class="text-xs text-amber-700">{{ t('tasks.form.autoOrderHint') }}</p>
+          <div v-if="form.auto_order_enabled" class="grid gap-3 sm:grid-cols-3">
+            <div class="space-y-1">
+              <Label for="auto-order-threshold">{{ t('tasks.form.autoOrderThreshold') }}</Label>
+              <Input id="auto-order-threshold" v-model.number="form.auto_order_score_threshold" type="number" min="0" max="100" />
+            </div>
+            <div class="space-y-1">
+              <Label for="auto-order-max-price">{{ t('tasks.form.autoOrderMaxPrice') }}</Label>
+              <Input id="auto-order-max-price" v-model.number="form.auto_order_max_price" type="number" min="0.01" step="0.01" />
+            </div>
+            <div class="space-y-1">
+              <Label for="auto-order-max-run">{{ t('tasks.form.autoOrderMaxPerRun') }}</Label>
+              <Input id="auto-order-max-run" v-model.number="form.auto_order_max_per_run" type="number" min="1" max="5" />
+            </div>
+          </div>
         </div>
       </div>
       <div class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">

@@ -3,6 +3,11 @@ import { http } from '@/lib/http'
 export interface AccountItem {
   name: string
   path: string
+  health_status: 'unknown' | 'available' | 'expired' | 'risk_controlled' | 'invalid_file' | 'error'
+  health_source: string | null
+  last_checked_at: string | null
+  last_success_at: string | null
+  health_message: string | null
 }
 
 export interface AccountDetail extends AccountItem {
@@ -35,4 +40,8 @@ export async function updateAccount(name: string, content: string): Promise<Acco
 
 export async function deleteAccount(name: string): Promise<{ message: string }> {
   return await http(`/api/accounts/${encodeURIComponent(name)}`, { method: 'DELETE' })
+}
+
+export async function checkAccountHealth(name: string): Promise<Omit<AccountItem, 'name' | 'path'>> {
+  return await http(`/api/accounts/${encodeURIComponent(name)}/health-check`, { method: 'POST' })
 }

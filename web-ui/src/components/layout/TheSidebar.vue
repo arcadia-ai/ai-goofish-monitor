@@ -8,6 +8,7 @@ import {
   Layers, 
   Terminal, 
   Settings2,
+  ShoppingCart,
   ChevronRight
 } from 'lucide-vue-next'
 import { useWebSocket } from '@/composables/useWebSocket'
@@ -24,6 +25,7 @@ const navItems = computed(() => [
   { to: '/tasks', label: t('sidebar.tasks'), icon: ListTodo },
   { to: '/accounts', label: t('sidebar.accounts'), icon: Users },
   { to: '/results', label: t('sidebar.results'), icon: Layers },
+  { to: '/orders', label: t('sidebar.orders'), icon: ShoppingCart },
   { to: '/logs', label: t('sidebar.logs'), icon: Terminal },
   { to: '/settings', label: t('sidebar.settings'), icon: Settings2 },
 ])

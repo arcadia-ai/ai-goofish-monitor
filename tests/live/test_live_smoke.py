@@ -26,6 +26,18 @@ def api_request(session: requests.Session, method: str, url: str, **kwargs) -> r
     kwargs.setdefault("timeout", REQUEST_TIMEOUT_SECONDS)
     return session.request(method=method, url=url, **kwargs)
 
+def authenticate_session(session: requests.Session, live_server) -> None:
+    response = api_request(
+        session,
+        "post",
+        f"{live_server.base_url}/auth/status",
+        json={
+            "username": live_server.settings.web_username,
+            "password": live_server.settings.web_password,
+        },
+    )
+    assert response.status_code == 200, response.text
+
 def fetch_task(session: requests.Session, base_url: str, task_id: int) -> dict:
     response = api_request(session, "get", f"{base_url}/api/tasks/{task_id}")
     assert response.status_code == 200, response.text
@@ -139,6 +151,7 @@ def test_live_preflight_smoke(live_server):
         health_response = api_request(session, "get", f"{live_server.base_url}/health")
         assert health_response.status_code == 200, health_response.text
         assert health_response.json()["status"] == "healthy"
+        authenticate_session(session, live_server)
 
         ai_response = api_request(
             session,
@@ -158,6 +171,7 @@ def test_live_real_traffic_task_smoke(live_server):
     payload = build_live_task_payload(live_server.account_state_file, task_name, keyword)
 
     with requests.Session() as session:
+        authenticate_session(session, live_server)
         create_response = api_request(
             session,
             "post",
@@ -229,6 +243,7 @@ def test_live_ai_task_generation_job(live_server):
     }
 
     with requests.Session() as session:
+        authenticate_session(session, live_server)
         response = api_request(
             session,
             "post",

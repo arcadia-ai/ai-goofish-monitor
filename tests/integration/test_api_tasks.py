@@ -169,6 +169,40 @@ def test_update_task_accepts_six_field_cron_expression(api_client, sample_task_p
     assert task_response.json()["cron"] == "0 0 8 * * *"
 
 
+def test_update_task_validates_merged_auto_order_configuration(
+    api_client, sample_task_payload
+):
+    payload = dict(sample_task_payload)
+    payload.update(
+        account_strategy="fixed",
+        account_state_file="state/buyer.json",
+    )
+    assert api_client.post("/api/tasks/", json=payload).status_code == 200
+
+    missing_cap = api_client.patch(
+        "/api/tasks/0", json={"auto_order_enabled": True}
+    )
+    assert missing_cap.status_code == 400
+
+    enabled = api_client.patch(
+        "/api/tasks/0",
+        json={
+            "auto_order_enabled": True,
+            "auto_order_score_threshold": 90,
+            "auto_order_max_price": "10000",
+            "auto_order_max_per_run": 2,
+        },
+    )
+    assert enabled.status_code == 200
+    assert enabled.json()["task"]["auto_order_enabled"] is True
+
+    incompatible_mode = api_client.patch(
+        "/api/tasks/0",
+        json={"decision_mode": "keyword", "keyword_rules": ["a7m4"]},
+    )
+    assert incompatible_mode.status_code == 400
+
+
 def test_update_task_keyword_keeps_historical_result_task_metadata(
     api_context,
     sample_task_payload,
