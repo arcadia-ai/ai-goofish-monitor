@@ -225,6 +225,7 @@ const enUSExtra = {
       deleted: 'Account deleted.',
       deleteFailed: 'Failed to delete account.',
       healthChecked: 'Account health check completed.',
+      healthReleased: 'Released paused tasks: {tasks}',
       healthCheckFailed: 'Account health check failed.',
     },
   },

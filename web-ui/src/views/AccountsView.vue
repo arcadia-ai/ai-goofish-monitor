@@ -96,9 +96,14 @@ function formatCheckedAt(value: string | null) {
 async function handleHealthCheck(name: string) {
   checkingAccount.value = name
   try {
-    await checkAccountHealth(name)
+    const result = await checkAccountHealth(name)
     await fetchAccounts()
-    toast({ title: t('accounts.toasts.healthChecked') })
+    toast({
+      title: t('accounts.toasts.healthChecked'),
+      description: result.released_tasks.length
+        ? t('accounts.toasts.healthReleased', { tasks: result.released_tasks.join('、') })
+        : undefined,
+    })
   } catch (e) {
     toast({ title: t('accounts.toasts.healthCheckFailed'), description: (e as Error).message, variant: 'destructive' })
   } finally {

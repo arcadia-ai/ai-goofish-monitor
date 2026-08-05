@@ -13,13 +13,40 @@ from typing import Awaitable, Callable, Dict, TextIO
 
 from src.ai_handler import send_ntfy_notification
 from src.config import STATE_FILE
-from src.failure_guard import FailureGuard
+from src.failure_guard import FailureGuard, SkipDecision
 from src.infrastructure.persistence.sqlite_task_repository import find_task_by_name_sync
 from src.utils import build_task_log_path
 
 STOP_TIMEOUT_SECONDS = 20
 SPIDER_DEBUG_LIMIT_ENV = "SPIDER_DEBUG_LIMIT"
 LifecycleHook = Callable[[int], Awaitable[None] | None]
+
+
+class TaskStartPausedError(RuntimeError):
+    """Raised when FailureGuard intentionally blocks a task start."""
+
+    def __init__(
+        self,
+        task_name: str,
+        decision: SkipDecision,
+        threshold: int,
+    ) -> None:
+        self.task_name = task_name
+        self.consecutive_failures = decision.consecutive_failures
+        self.last_failure_reason = decision.reason
+        self.paused_until = decision.paused_until
+        self.threshold = threshold
+        paused_until = (
+            decision.paused_until.strftime("%Y-%m-%d %H:%M:%S %z")
+            if decision.paused_until
+            else "未知"
+        )
+        super().__init__(
+            f"任务 '{task_name}' 已暂停重试"
+            f"（连续失败 {decision.consecutive_failures}/{threshold}）。"
+            f"最后失败原因：{decision.reason}。预计恢复时间：{paused_until}。"
+            "请先完成关联账号健康检测，或等待暂停自然结束。"
+        )
 
 
 class ProcessService:
@@ -143,7 +170,11 @@ class ProcessService:
         )
         if decision.skip:
             await self._notify_skip(task_name, decision)
-            return False
+            raise TaskStartPausedError(
+                task_name,
+                decision,
+                self.failure_guard.threshold,
+            )
 
         log_file_path = ""
         log_file_handle = None

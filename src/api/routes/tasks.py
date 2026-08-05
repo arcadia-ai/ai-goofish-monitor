@@ -14,7 +14,7 @@ from src.api.dependencies import (
     get_task_service,
 )
 from src.services.task_service import TaskService
-from src.services.process_service import ProcessService
+from src.services.process_service import ProcessService, TaskStartPausedError
 from src.services.scheduler_service import SchedulerService
 from src.services.task_generation_service import TaskGenerationService
 from src.services.task_generation_runner import (
@@ -275,7 +275,10 @@ async def start_task(
         raise HTTPException(status_code=400, detail="任务已被禁用，无法启动")
     if task.is_running:
         raise HTTPException(status_code=400, detail="任务已在运行中")
-    success = await process_service.start_task(task_id, task.task_name)
+    try:
+        success = await process_service.start_task(task_id, task.task_name)
+    except TaskStartPausedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not success:
         raise HTTPException(status_code=500, detail="启动任务失败")
     return {"message": f"任务 '{task.task_name}' 已启动"}

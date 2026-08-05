@@ -76,6 +76,12 @@ def _get_mtime(path: Optional[str]) -> Optional[float]:
         return None
 
 
+def _normalize_path(path: Optional[str]) -> Optional[str]:
+    if not path:
+        return None
+    return os.path.normcase(os.path.abspath(os.path.normpath(path)))
+
+
 def _cookie_changed(
     cookie_path: Optional[str], previous_mtime: Optional[float]
 ) -> bool:
@@ -216,6 +222,51 @@ class FailureGuard:
             }
 
         self._update_task(task_key, _reset)
+
+    def release_for_cookie_path(
+        self,
+        cookie_path: str,
+        *,
+        reason: str = "account_health_available",
+        now: Optional[datetime] = None,
+    ) -> list[str]:
+        """Release paused tasks whose last failure used the given account state."""
+        normalized_target = _normalize_path(cookie_path)
+        if normalized_target is None:
+            return []
+
+        released_tasks: list[str] = []
+        recovered_at = _dt_to_str(_now(self.tz_name, now=now))
+        _ensure_parent_dir(self.path)
+        with open(self.path, "a+", encoding="utf-8") as fh:
+            with _FileLock(fh):
+                fh.seek(0)
+                data = self._load()
+                tasks = data.setdefault("tasks", {})
+                for task_key, raw_entry in tasks.items():
+                    if not isinstance(raw_entry, dict):
+                        continue
+                    if _normalize_path(raw_entry.get("cookie_path")) != normalized_target:
+                        continue
+                    if not (
+                        _as_int(raw_entry.get("consecutive_failures"), 0) > 0
+                        or raw_entry.get("paused_until")
+                    ):
+                        continue
+
+                    entry = dict(raw_entry)
+                    entry["consecutive_failures"] = 0
+                    entry["paused_until"] = None
+                    entry["last_notified_date"] = None
+                    entry["last_recovered_at"] = recovered_at
+                    entry["last_recovery_reason"] = reason
+                    tasks[task_key] = entry
+                    released_tasks.append(task_key)
+
+                if released_tasks:
+                    self._save(data)
+
+        return released_tasks
 
     def should_skip_start(
         self,

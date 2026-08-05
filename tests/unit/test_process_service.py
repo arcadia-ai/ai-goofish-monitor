@@ -1,8 +1,12 @@
 import asyncio
 import sys
+from datetime import datetime
 from types import SimpleNamespace
 
-from src.services.process_service import ProcessService
+import pytest
+
+from src.failure_guard import SkipDecision
+from src.services.process_service import ProcessService, TaskStartPausedError
 
 
 class FakeProcess:
@@ -109,3 +113,37 @@ def test_process_service_adds_debug_limit_arg_when_env_enabled(monkeypatch):
         "--debug-limit",
         "1",
     ]
+
+
+def test_process_service_raises_paused_error_without_spawning(monkeypatch):
+    async def run_scenario():
+        service = ProcessService()
+        decision = SkipDecision(
+            skip=True,
+            should_notify=False,
+            reason="old timeout",
+            paused_until=datetime(2026, 8, 5, 11, 46, 22),
+            consecutive_failures=3,
+        )
+        service.failure_guard.should_skip_start = lambda *args, **kwargs: decision
+
+        notified = []
+
+        async def fake_notify(task_name, actual_decision):
+            notified.append((task_name, actual_decision))
+
+        async def fail_if_spawned(*_args, **_kwargs):
+            raise AssertionError("paused task must not spawn a process")
+
+        monkeypatch.setattr(service, "_notify_skip", fake_notify)
+        monkeypatch.setattr(service, "_spawn_process", fail_if_spawned)
+
+        with pytest.raises(TaskStartPausedError) as caught:
+            await service.start_task(0, "task-a")
+
+        assert caught.value.consecutive_failures == 3
+        assert caught.value.last_failure_reason == "old timeout"
+        assert "预计恢复时间" in str(caught.value)
+        assert notified == [("task-a", decision)]
+
+    asyncio.run(run_scenario())

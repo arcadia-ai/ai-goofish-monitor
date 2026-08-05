@@ -1,10 +1,13 @@
 import asyncio
 import time
+from datetime import datetime
 
 from fastapi.testclient import TestClient
 
 from src.api.routes import results, tasks
+from src.failure_guard import SkipDecision
 from src.services.result_storage_service import save_result_record
+from src.services.process_service import TaskStartPausedError
 
 
 def test_create_list_update_delete_task(api_client, api_context, sample_task_payload):
@@ -59,6 +62,52 @@ def test_start_stop_task_updates_status(api_client, api_context, sample_task_pay
     process_service = api_context["process_service"]
     assert process_service.started == [(0, sample_task_payload["task_name"])]
     assert process_service.stopped == [0]
+
+
+def test_start_task_returns_409_when_failure_guard_pauses_start(
+    api_client,
+    api_context,
+    sample_task_payload,
+    monkeypatch,
+):
+    assert api_client.post("/api/tasks/", json=sample_task_payload).status_code == 200
+    decision = SkipDecision(
+        skip=True,
+        should_notify=False,
+        reason="old timeout",
+        paused_until=datetime(2026, 8, 5, 11, 46, 22),
+        consecutive_failures=3,
+    )
+
+    async def paused_start(_task_id, task_name):
+        raise TaskStartPausedError(task_name, decision, threshold=3)
+
+    monkeypatch.setattr(api_context["process_service"], "start_task", paused_start)
+
+    response = api_client.post("/api/tasks/start/0")
+
+    assert response.status_code == 409
+    assert "连续失败 3/3" in response.json()["detail"]
+    assert "old timeout" in response.json()["detail"]
+
+
+def test_start_task_keeps_500_for_process_start_failure(
+    api_client,
+    api_context,
+    sample_task_payload,
+    monkeypatch,
+):
+    assert api_client.post("/api/tasks/", json=sample_task_payload).status_code == 200
+
+    async def failed_start(_task_id, _task_name):
+        return False
+
+    monkeypatch.setattr(api_context["process_service"], "start_task", failed_start)
+
+    response = api_client.post("/api/tasks/start/0")
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "启动任务失败"
 
 
 def test_generate_keyword_mode_task_without_ai_criteria(api_client):

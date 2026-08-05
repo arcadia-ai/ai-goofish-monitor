@@ -9,6 +9,7 @@ import aiofiles
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List
+from src.failure_guard import FailureGuard
 from src.infrastructure.config.env_manager import env_manager
 from src.services.account_health_checker import check_account_health
 from src.services.account_health_service import (
@@ -150,9 +151,24 @@ async def health_check_account(name: str):
         raise HTTPException(status_code=409, detail="该账号正在检测中")
     async with lock:
         result = await check_account_health(path)
-        return record_account_health(
+        health = record_account_health(
             path,
             result["status"],
             source="manual",
             message=result.get("message"),
         )
+        released_tasks: list[str] = []
+        if result["status"] == "available":
+            try:
+                released_tasks = FailureGuard().release_for_cookie_path(path)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"账号检测成功，但解除关联任务暂停失败：{exc}",
+                ) from exc
+            if released_tasks:
+                print(
+                    f"[FailureGuard] 账号 '{account_name}' 健康检测通过，"
+                    f"已解除任务暂停: {', '.join(released_tasks)}"
+                )
+        return {**health, "released_tasks": released_tasks}

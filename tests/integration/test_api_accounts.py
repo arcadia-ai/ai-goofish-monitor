@@ -41,11 +41,42 @@ def test_manual_health_check_rejects_parallel_and_returns_result(monkeypatch, tm
     async def fake_check(path):
         return {"status": "available", "message": "ok"}
 
+    class FakeFailureGuard:
+        def release_for_cookie_path(self, path):
+            assert path == str(state_dir / "buyer.json")
+            return ["task-a"]
+
     monkeypatch.setattr(accounts, "check_account_health", fake_check)
+    monkeypatch.setattr(accounts, "FailureGuard", FakeFailureGuard)
     response = _client().post("/api/accounts/buyer/health-check")
     assert response.status_code == 200
     assert response.json()["health_status"] == "available"
     assert response.json()["health_source"] == "manual"
+    assert response.json()["released_tasks"] == ["task-a"]
+
+
+def test_manual_health_check_does_not_release_when_unavailable(monkeypatch, tmp_path):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "buyer.json").write_text('{"cookies": []}', encoding="utf-8")
+    monkeypatch.setenv("ACCOUNT_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("APP_DATABASE_FILE", str(tmp_path / "app.sqlite3"))
+
+    async def fake_check(path):
+        return {"status": "expired", "message": "login required"}
+
+    class UnexpectedFailureGuard:
+        def __init__(self):
+            raise AssertionError("non-available health result must not release tasks")
+
+    monkeypatch.setattr(accounts, "check_account_health", fake_check)
+    monkeypatch.setattr(accounts, "FailureGuard", UnexpectedFailureGuard)
+
+    response = _client().post("/api/accounts/buyer/health-check")
+
+    assert response.status_code == 200
+    assert response.json()["health_status"] == "expired"
+    assert response.json()["released_tasks"] == []
 
 
 def test_manual_health_check_returns_409_when_same_account_is_running(monkeypatch, tmp_path):

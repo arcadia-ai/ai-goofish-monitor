@@ -225,6 +225,7 @@ const zhCNExtra = {
       deleted: '账号已删除',
       deleteFailed: '删除账号失败',
       healthChecked: '账号状态检测完成',
+      healthReleased: '已解除关联任务暂停：{tasks}',
       healthCheckFailed: '账号状态检测失败',
     },
   },

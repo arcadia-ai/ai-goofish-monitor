@@ -14,6 +14,10 @@ export interface AccountDetail extends AccountItem {
   content: string
 }
 
+export interface AccountHealthCheckResult extends Omit<AccountItem, 'name' | 'path'> {
+  released_tasks: string[]
+}
+
 export async function listAccounts(): Promise<AccountItem[]> {
   return await http('/api/accounts')
 }
@@ -42,6 +46,6 @@ export async function deleteAccount(name: string): Promise<{ message: string }> 
   return await http(`/api/accounts/${encodeURIComponent(name)}`, { method: 'DELETE' })
 }
 
-export async function checkAccountHealth(name: string): Promise<Omit<AccountItem, 'name' | 'path'>> {
+export async function checkAccountHealth(name: string): Promise<AccountHealthCheckResult> {
   return await http(`/api/accounts/${encodeURIComponent(name)}/health-check`, { method: 'POST' })
 }
